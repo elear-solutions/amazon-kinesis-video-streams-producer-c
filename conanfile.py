@@ -1,7 +1,7 @@
 from conans import ConanFile, CMake, tools
 
 class cmockalibConan(ConanFile):
-    name = "amazon-kinesis-video-streams-producer-c"
+    name = "cproducer"
     version = "0.1.0"
     license = "<Put the package license here>"
     author = "<Put your name here> <And your email here>"
@@ -19,15 +19,30 @@ class cmockalibConan(ConanFile):
     }
 
     def build(self):
-        self.run("apt-get update")
-        self.run("apt-get install git -y")
+        if self.settings.os.distribution == "ubuntu":
+            self.run("apt-get update")
+            self.run("apt-get install git -y")
+
+        elif self.settings.os.distribution == "alpine":
+            self.run("apk update")
+            self.run("apk add git")
+
         cmake = CMake(self)
         cmake.configure(source_folder=".")
         cmake.build()
 
     def package(self):
-        self.copy("*.h", dst="include", src="include")
-        self.copy("*", dst="lib", src="lib", keep_path=False)
+        self.copy("*.h", dst="include", src="src/include/")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/client/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/common/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/duration/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/heap/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/mkvgen/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/state/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/trace/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/utils/include")
+        self.copy("*.h", dst="include", src="dependency/libkvspic/kvspic-src/src/view/include")
+        self.copy("*.so", dst="lib", src=".", keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = [ "cproducer" ]
