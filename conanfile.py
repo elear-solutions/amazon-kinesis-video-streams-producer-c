@@ -1,7 +1,7 @@
 from conans import ConanFile, CMake, tools
 
 class cmockalibConan(ConanFile):
-    name = "kinesiscproducer"
+    name = "cproducer"
     version = "1.0.0"
     license = "<Put the package license here>"
     author = "<Put your name here> <And your email here>"
@@ -45,4 +45,4 @@ class cmockalibConan(ConanFile):
         self.copy("*.so", dst="lib", src=".", keep_path=False)
 
     def package_info(self):
-        self.cpp_info.libs = [ "kinesiscproducer" ]
+        self.cpp_info.libs = [ "cproducer" ]
