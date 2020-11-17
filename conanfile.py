@@ -2,7 +2,7 @@ from conans import ConanFile, CMake, tools
 
 class cmockalibConan(ConanFile):
     name = "kinesiscproducer"
-    version = "0.1.0"
+    version = "1.0.0"
     license = "<Put the package license here>"
     author = "<Put your name here> <And your email here>"
     url = "https://github.com/elear-solutions/amazon-kinesis-video-streams-producer-c.git"
