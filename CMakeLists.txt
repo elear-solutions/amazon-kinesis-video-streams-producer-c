@@ -128,7 +128,7 @@ if(BUILD_COMMON_CURL)
     find_package(CURL REQUIRED)
     set(CURL_LIBRARIES CURL::libcurl)
   else()
-    pkg_check_modules(CURL REQUIRED libcurl)
+    find_package(CURL REQUIRED)
   endif()
 
   set(OPEN_SRC_INCLUDE_DIRS ${OPEN_SRC_INCLUDE_DIRS} ${CURL_INCLUDE_DIRS})
