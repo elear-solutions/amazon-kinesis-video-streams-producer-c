@@ -23,6 +23,7 @@ option(UNDEFINED_BEHAVIOR_SANITIZER "Build with UndefinedBehaviorSanitizer." OFF
 option(ALIGNED_MEMORY_MODEL "Aligned memory model ONLY." OFF)
 
 set(CMAKE_MACOSX_RPATH TRUE)
+add_definitions(-DCONSTRAINED_DEVICE)
 
 get_filename_component(ROOT "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
