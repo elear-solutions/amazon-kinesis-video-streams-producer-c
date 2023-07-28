@@ -4,10 +4,8 @@
 #define LOG_CLASS "StaticCredentialProvider"
 #include "Include_i.h"
 
-STATUS createStaticCredentialProvider(PCHAR accessKeyId, UINT32 accessKeyIdLen,
-                                      PCHAR secretKey, UINT32 secretKeyLen,
-                                      PCHAR sessionToken, UINT32 sessionTokenLen, UINT64 expiration,
-                                      PAwsCredentialProvider* ppCredentialProvider)
+STATUS createStaticCredentialProvider(PCHAR accessKeyId, UINT32 accessKeyIdLen, PCHAR secretKey, UINT32 secretKeyLen, PCHAR sessionToken,
+                                      UINT32 sessionTokenLen, UINT64 expiration, PAwsCredentialProvider* ppCredentialProvider)
 {
     ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
@@ -15,8 +13,8 @@ STATUS createStaticCredentialProvider(PCHAR accessKeyId, UINT32 accessKeyIdLen,
     PStaticCredentialProvider pStaticCredentialProvider = NULL;
 
     CHK(ppCredentialProvider != NULL, STATUS_NULL_ARG);
-    // Create the credentials object
 
+    // Create the credentials object
     CHK_STATUS(createAwsCredentials(accessKeyId, accessKeyIdLen, secretKey, secretKeyLen,
                                     sessionToken, sessionTokenLen, expiration, &pAwsCredentials));
 
@@ -29,7 +27,7 @@ STATUS createStaticCredentialProvider(PCHAR accessKeyId, UINT32 accessKeyIdLen,
 CleanUp:
 
     if (STATUS_FAILED(retStatus)) {
-        freeStaticCredentialProvider((PAwsCredentialProvider *) &pStaticCredentialProvider);
+        freeStaticCredentialProvider((PAwsCredentialProvider*) &pStaticCredentialProvider);
         pStaticCredentialProvider = NULL;
     }
 

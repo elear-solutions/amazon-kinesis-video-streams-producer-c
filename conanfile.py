@@ -2,7 +2,7 @@ from conans import ConanFile, CMake, tools
 
 class cmockalibConan(ConanFile):
     name = "cproducer"
-    version = "1.1.0"
+    version = "1.4.1"
     license = "<Put the package license here>"
     author = "<Put your name here> <And your email here>"
     url = "https://github.com/elear-solutions/amazon-kinesis-video-streams-producer-c.git"
@@ -19,15 +19,10 @@ class cmockalibConan(ConanFile):
     }
 
     def build(self):
-        if self.settings.os.distribution == "ubuntu":
-            self.run("apt-get update")
-            self.run("apt-get install git -y")
-
-        elif self.settings.os.distribution == "alpine":
-            self.run("apk update")
-            self.run("apk add git")
-
         cmake = CMake(self)
+
+        cmake.definitions["BUILD_DEPENDENCIES"] = False
+
         cmake.configure(source_folder=".")
         cmake.build()
 

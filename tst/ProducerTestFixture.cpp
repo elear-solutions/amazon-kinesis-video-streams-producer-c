@@ -83,6 +83,7 @@ STATUS ProducerClientTestBase::testStreamErrorReportFunc(UINT64 customData,
     BOOL resetStream = FALSE;
     MUTEX_LOCK(pTest->mTestCallbackLock);
     pTest->mStreamErrorFnCount++;
+    pTest->mLastError = errorStatus;
     if (IS_RETRIABLE_ERROR(errorStatus) && pTest->mResetStreamCounter > 0) {
         pTest->mResetStreamCounter--;
         resetStream = TRUE;
@@ -224,7 +225,13 @@ ProducerClientTestBase::ProducerClientTestBase() :
         mReadSize(0),
         mStreamCallbacks(NULL),
         mProducerCallbacks(NULL),
-        mResetStreamCounter(0)
+        mResetStreamCounter(0),
+        mAuthCallbacks(NULL),
+        mConnectionStaleFnCount(0),
+        mLastError(STATUS_SUCCESS),
+        mDescribeRetStatus(STATUS_SUCCESS),
+        mDescribeFailCount(0),
+        mDescribeRecoverCount(0)
 {
     auto logLevelStr = GETENV("AWS_KVS_LOG_LEVEL");
     if (logLevelStr != NULL) {
@@ -271,6 +278,11 @@ ProducerClientTestBase::ProducerClientTestBase() :
     mDeviceInfo.clientInfo.loggerLogLevel = this->loggerLogLevel;
     mDeviceInfo.clientInfo.logMetric = TRUE;
 
+    mDeviceInfo.clientInfo.kvsRetryStrategyCallbacks.createRetryStrategyFn = createRetryStrategyFn;
+    mDeviceInfo.clientInfo.kvsRetryStrategyCallbacks.getCurrentRetryAttemptNumberFn = getCurrentRetryAttemptNumberFn;
+    mDeviceInfo.clientInfo.kvsRetryStrategyCallbacks.freeRetryStrategyFn = freeRetryStrategyFn;
+    mDeviceInfo.clientInfo.kvsRetryStrategyCallbacks.executeRetryStrategyFn = executeRetryStrategyFn;
+
     mDefaultRegion[0] = '\0';
     mStreamingRotationPeriod = TEST_STREAMING_TOKEN_DURATION;
 
@@ -306,7 +318,7 @@ ProducerClientTestBase::ProducerClientTestBase() :
     mStreamInfo.streamCaps.bufferDuration = TEST_STREAM_BUFFER_DURATION;
     mStreamInfo.streamCaps.replayDuration = 10 * HUNDREDS_OF_NANOS_IN_A_SECOND;
     mStreamInfo.streamCaps.fragmentDuration = 2 * HUNDREDS_OF_NANOS_IN_A_SECOND;
-    mStreamInfo.streamCaps.connectionStalenessDuration = 20 * HUNDREDS_OF_NANOS_IN_A_SECOND;
+    mStreamInfo.streamCaps.connectionStalenessDuration = TEST_STREAM_CONNECTION_STALENESS_DURATION;
     mStreamInfo.streamCaps.maxLatency = TEST_MAX_STREAM_LATENCY;
     mStreamInfo.streamCaps.timecodeScale = 1 * HUNDREDS_OF_NANOS_IN_A_MILLISECOND;
     mStreamInfo.streamCaps.frameRate = 100;
@@ -363,16 +375,15 @@ VOID ProducerClientTestBase::handlePressure(volatile BOOL* pressureFlag, UINT32 
 
         // whether to give some extra time for the pressure to relieve. For example, storageOverflow takes longer
         // to recover as it needs to wait for persisted acks.
-        if (gracePeriodSeconds != 0){
+        if (gracePeriodSeconds != 0) {
             DLOGD("Pressure handler in grace period. Sleep for %u seconds.", gracePeriodSeconds);
             THREAD_SLEEP(gracePeriodSeconds * HUNDREDS_OF_NANOS_IN_A_SECOND);
         }
-
     } else if (mCurrentPressureState == BufferInPressure) { // if we are already in pressured state
         if (*pressureFlag) { // still getting the pressure signal, remain in pressured state.
             DLOGD("Pressure handler sleep for 1 second.");
             THREAD_SLEEP(1 * HUNDREDS_OF_NANOS_IN_A_SECOND);
-            *pressureFlag = false;
+            *pressureFlag = FALSE;
             mPressureHandlerRetryCount--;
             if (mPressureHandlerRetryCount == 0) {
                 GTEST_FAIL() << "Pressure handler tried " << TEST_DEFAULT_PRESSURE_HANDLER_RETRY_COUNT << " times without relieving pressure.";
@@ -385,14 +396,16 @@ VOID ProducerClientTestBase::handlePressure(volatile BOOL* pressureFlag, UINT32 
     }
 }
 
-VOID ProducerClientTestBase::createDefaultProducerClient(BOOL cachingEndpoint, UINT64 createStreamTimeout, BOOL continuousRetry)
+VOID ProducerClientTestBase::createDefaultProducerClient(BOOL cachingEndpoint, UINT64 createStreamTimeout, UINT64 stopStreamTimeout, BOOL continuousRetry, UINT64 rotationPeriod)
 {
     createDefaultProducerClient(cachingEndpoint ? API_CALL_CACHE_TYPE_ENDPOINT_ONLY : API_CALL_CACHE_TYPE_NONE,
             createStreamTimeout,
-            continuousRetry);
+            stopStreamTimeout,
+            continuousRetry,
+            rotationPeriod);
 }
 
-VOID ProducerClientTestBase::createDefaultProducerClient(API_CALL_CACHE_TYPE cacheType, UINT64 createStreamTimeout, BOOL continuousRetry)
+VOID ProducerClientTestBase::createDefaultProducerClient(API_CALL_CACHE_TYPE cacheType, UINT64 createStreamTimeout, UINT64 stopStreamTimeout, BOOL continuousRetry, UINT64 rotationPeriod)
 {
     PAuthCallbacks pAuthCallbacks;
     PStreamCallbacks pStreamCallbacks;
@@ -406,12 +419,11 @@ VOID ProducerClientTestBase::createDefaultProducerClient(API_CALL_CACHE_TYPE cac
                                                                      TEST_USER_AGENT,
                                                                      &mCallbacksProvider));
 
-    UINT64 expiration = GETTIME() + TEST_CREDENTIAL_EXPIRATION;
     EXPECT_EQ(STATUS_SUCCESS, createRotatingStaticAuthCallbacks(mCallbacksProvider,
                                                                 mAccessKey,
                                                                 mSecretKey,
                                                                 mSessionToken,
-                                                                expiration,
+                                                                rotationPeriod,
                                                                 mStreamingRotationPeriod,
                                                                 &pAuthCallbacks));
 
@@ -455,7 +467,11 @@ VOID ProducerClientTestBase::createDefaultProducerClient(API_CALL_CACHE_TYPE cac
     // Set quick timeouts
     mDeviceInfo.clientInfo.createClientTimeout = TEST_CREATE_PRODUCER_TIMEOUT;
     mDeviceInfo.clientInfo.createStreamTimeout = createStreamTimeout;
+    mDeviceInfo.clientInfo.stopStreamTimeout = stopStreamTimeout;
     mDeviceInfo.clientInfo.loggerLogLevel = this->loggerLogLevel;
+
+    // Store the auth callbacks which is used for fault injection
+    mAuthCallbacks = pAuthCallbacks;
 
     // Create the producer client
     EXPECT_EQ(STATUS_SUCCESS, createKinesisVideoClientSync(&mDeviceInfo, mCallbacksProvider, &mClientHandle));
@@ -477,7 +493,7 @@ VOID ProducerClientTestBase::updateFrame()
     mFrame.decodingTs = mFrame.presentationTs;
 }
 
-STATUS ProducerClientTestBase::createTestStream(UINT32 index, STREAMING_TYPE streamingType, UINT32 maxLatency, UINT32 bufferDuration, BOOL sync)
+STATUS ProducerClientTestBase::createTestStream(UINT32 index, STREAMING_TYPE streamingType, UINT64 maxLatency, UINT64 bufferDuration, BOOL sync)
 {
     if (index >= TEST_MAX_STREAM_COUNT) {
         return STATUS_INVALID_ARG;
@@ -730,12 +746,19 @@ STATUS ProducerClientTestBase::testDescribeStreamFunc(UINT64 customData, PCHAR s
 {
     UNUSED_PARAM(streamName);
     UNUSED_PARAM(pServiceCallContext);
+    STATUS retStatus = STATUS_SUCCESS;
 
     ProducerClientTestBase* pTestBase = (ProducerClientTestBase*) customData;
 
+    // Fault injection
+    if (pTestBase->mDescribeStreamFnCount >= pTestBase->mDescribeFailCount &&
+            pTestBase->mDescribeStreamFnCount < pTestBase->mDescribeRecoverCount) {
+        retStatus = pTestBase->mDescribeRetStatus;
+    }
+
     pTestBase->mDescribeStreamFnCount++;
 
-    return STATUS_SUCCESS;
+    return retStatus;
 }
 
 STATUS ProducerClientTestBase::testDescribeStreamSecondFunc(UINT64 customData, PCHAR streamName,
@@ -817,6 +840,35 @@ VOID ProducerClientTestBase::printFrameInfo(PFrame pFrame)
           pFrame->size,
           pFrame->decodingTs,
           pFrame->presentationTs);
+}
+
+STATUS ProducerClientTestBase::createRetryStrategyFn(PKvsRetryStrategy pKvsRetryStrategy) {
+    STATUS retStatus = STATUS_SUCCESS;
+    PExponentialBackoffRetryStrategyState pExponentialBackoffRetryStrategyState = NULL;
+
+    CHK_STATUS(exponentialBackoffRetryStrategyCreate(pKvsRetryStrategy));
+    CHK(pKvsRetryStrategy->retryStrategyType == KVS_RETRY_STRATEGY_EXPONENTIAL_BACKOFF_WAIT, STATUS_INTERNAL_ERROR);
+
+    pExponentialBackoffRetryStrategyState = TO_EXPONENTIAL_BACKOFF_STATE(pKvsRetryStrategy->pRetryStrategy);
+
+    // Overwrite retry config to avoid slow long running tests
+    pExponentialBackoffRetryStrategyState->exponentialBackoffRetryStrategyConfig.retryFactorTime = HUNDREDS_OF_NANOS_IN_A_MILLISECOND * 5;
+    pExponentialBackoffRetryStrategyState->exponentialBackoffRetryStrategyConfig.maxRetryWaitTime = HUNDREDS_OF_NANOS_IN_A_MILLISECOND * 75;
+
+CleanUp:
+    return retStatus;
+}
+
+STATUS ProducerClientTestBase::getCurrentRetryAttemptNumberFn(PKvsRetryStrategy pKvsRetryStrategy, PUINT32 pRetryCount) {
+    return getExponentialBackoffRetryCount(pKvsRetryStrategy, pRetryCount);
+}
+
+STATUS ProducerClientTestBase::freeRetryStrategyFn(PKvsRetryStrategy pKvsRetryStrategy) {
+    return exponentialBackoffRetryStrategyFree(pKvsRetryStrategy);
+}
+
+STATUS ProducerClientTestBase::executeRetryStrategyFn(PKvsRetryStrategy pKvsRetryStrategy, PUINT64 retryWaitTime) {
+    return getExponentialBackoffRetryStrategyWaitTime(pKvsRetryStrategy, retryWaitTime);
 }
 
 }  // namespace video

@@ -347,6 +347,7 @@ PVOID ProducerClientTestBase::basicProducerRoutine(STREAM_HANDLE streamHandle, S
 
     UINT32 index = 0, persistentMetadataIndex = 0;
     UINT64 timestamp = GETTIME();
+    UINT64 diffTime;
     Frame frame;
     std::string persistentMetadataName;
     TID tid = GETTID();
@@ -449,7 +450,10 @@ EXPECT_TRUE(kinesis_video_stream->putFrame(eofr));
 
         // Sleep a while for non-offline modes
         if (streamingType != STREAMING_TYPE_OFFLINE) {
-            THREAD_SLEEP(TEST_FRAME_DURATION);
+            diffTime = GETTIME()-timestamp;
+            if (diffTime < TEST_FRAME_DURATION) {
+                THREAD_SLEEP(TEST_FRAME_DURATION-diffTime);
+            }
         }
     }
 
@@ -516,7 +520,7 @@ TEST_F(ProducerClientBasicTest, create_produce_stream)
 #endif
 
     // Wait for some time to produce
-    THREAD_SLEEP(TEST_EXECUTION_DURATION);
+    THREAD_SLEEP(2*TEST_EXECUTION_DURATION);
 
     // Indicate the cancel for the threads
     mStopProducer = TRUE;
@@ -571,7 +575,7 @@ TEST_F(ProducerClientBasicTest, create_produce_stream_parallel)
     }
 
     // Wait for some time to produce
-    THREAD_SLEEP(TEST_EXECUTION_DURATION);
+    THREAD_SLEEP(2*TEST_EXECUTION_DURATION);
 
     // Indicate the cancel for the threads
     mStopProducer = TRUE;
@@ -617,7 +621,7 @@ TEST_F(ProducerClientBasicTest, create_produce_client_parallel)
     }
 
     // Wait for some time to produce
-    THREAD_SLEEP(TEST_EXECUTION_DURATION);
+    THREAD_SLEEP(2*TEST_EXECUTION_DURATION);
 
     // Indicate the cancel for the threads
     mStopProducer = TRUE;
@@ -675,13 +679,13 @@ TEST_F(ProducerClientBasicTest, cachingEndpointProvider_Returns_EndpointFromCach
     EXPECT_TRUE(mProducerStopped) << "Producer thread failed to stop cleanly";
 
     // Expect the number of calls
-    EXPECT_EQ((ITERATION_COUNT + 1) * TEST_STREAM_COUNT, mPutStreamFnCount);
-    EXPECT_EQ((ITERATION_COUNT + 1) * TEST_STREAM_COUNT, mGetStreamingEndpointFnCount);
+    EXPECT_EQ((ITERATION_COUNT + 1 + 1) * TEST_STREAM_COUNT, mPutStreamFnCount);
+    EXPECT_EQ((ITERATION_COUNT + 1 + 1) * TEST_STREAM_COUNT, mGetStreamingEndpointFnCount);
     EXPECT_EQ(0, mCurlCreateStreamCount);
     EXPECT_EQ(0, mCurlDescribeStreamCount);
     EXPECT_EQ(0, mCurlTagResourceCount);
     EXPECT_EQ(1 * TEST_STREAM_COUNT, mCurlGetDataEndpointCount);
-    EXPECT_EQ((ITERATION_COUNT + 1) * TEST_STREAM_COUNT, mCurlPutMediaCount);
+    EXPECT_EQ((ITERATION_COUNT + 1 + 1) * TEST_STREAM_COUNT, mCurlPutMediaCount);
 
     // We will block for some time due to an incorrect implementation of the awaiting code
     // NOTE: The proper implementation should use synchronization primitives to await for the
@@ -955,6 +959,79 @@ TEST_F(ProducerClientBasicTest, createStreamStreamUntilTokenRotationStopSyncFree
         frame.presentationTs = frame.decodingTs;
         frame.flags = frame.index % TEST_FPS == 0 ? FRAME_FLAG_KEY_FRAME : FRAME_FLAG_NONE;
         currentTime = GETTIME();
+    }
+
+    EXPECT_EQ(STATUS_SUCCESS, stopKinesisVideoStreamSync(streamHandle));
+    EXPECT_EQ(STATUS_SUCCESS, freeKinesisVideoStream(&streamHandle));
+    EXPECT_EQ(STATUS_SUCCESS, freeKinesisVideoClient(&clientHandle));
+    EXPECT_EQ(STATUS_SUCCESS, freeDeviceInfo(&pDeviceInfo));
+    EXPECT_EQ(STATUS_SUCCESS, freeStreamInfoProvider(&pStreamInfo));
+    EXPECT_EQ(STATUS_SUCCESS, freeCallbacksProvider(&pClientCallbacks));
+}
+
+TEST_F(ProducerClientBasicTest, createStreamPutMultipleFrameTimeoutLatencyStopSyncFree)
+{
+    PDeviceInfo pDeviceInfo;
+    PClientCallbacks pClientCallbacks;
+    CLIENT_HANDLE clientHandle;
+    STREAM_HANDLE streamHandle;
+    PStreamInfo pStreamInfo;
+    CHAR streamName[MAX_STREAM_NAME_LEN + 1];
+    Frame frame;
+    UINT32 i;
+    BYTE frameBuf[100000]; // large frames are needed
+    UINT32 fragmentCount = 3, frameRate = 30, keyFrameInterval = 60;
+
+    frame.version = FRAME_CURRENT_VERSION;
+    frame.duration = 15 * HUNDREDS_OF_NANOS_IN_A_MILLISECOND;
+    frame.frameData = frameBuf;
+    frame.trackId = DEFAULT_VIDEO_TRACK_ID;
+    frame.index = 0;
+    frame.decodingTs = 0;
+    frame.presentationTs = 0;
+    frame.size = SIZEOF(frameBuf);
+    frame.flags = FRAME_FLAG_KEY_FRAME;
+    Frame eofr = EOFR_FRAME_INITIALIZER;
+
+    STRNCPY(streamName, (PCHAR) TEST_STREAM_NAME, MAX_STREAM_NAME_LEN);
+    streamName[MAX_STREAM_NAME_LEN] = '\0';
+    EXPECT_EQ(STATUS_SUCCESS, createDefaultDeviceInfo(&pDeviceInfo));
+    pDeviceInfo->clientInfo.loggerLogLevel = GET_LOGGER_LOG_LEVEL();
+    EXPECT_EQ(STATUS_SUCCESS, createRealtimeVideoStreamInfoProvider(streamName, TEST_RETENTION_PERIOD, TEST_STREAM_BUFFER_DURATION, &pStreamInfo));
+    pStreamInfo->streamCaps.nalAdaptationFlags = NAL_ADAPTATION_FLAG_NONE;
+    pStreamInfo->streamCaps.maxLatency = 15 * HUNDREDS_OF_NANOS_IN_A_SECOND;
+    pStreamInfo->streamCaps.replayDuration = 30 * HUNDREDS_OF_NANOS_IN_A_SECOND;
+    pStreamInfo->streamCaps.bufferDuration = 120 * HUNDREDS_OF_NANOS_IN_A_SECOND;
+    pStreamInfo->streamCaps.connectionStalenessDuration = 40 * HUNDREDS_OF_NANOS_IN_A_SECOND;
+    pStreamInfo->streamCaps.keyFrameFragmentation = TRUE;
+    pStreamInfo->streamCaps.frameRate = frameRate;
+    pStreamInfo->streamCaps.frameTimecodes = TRUE;
+
+    EXPECT_EQ(STATUS_SUCCESS, createDefaultCallbacksProvider(5, mAccessKey, mSecretKey,
+                                                             mSessionToken, MAX_UINT64,
+                                                             mRegion, TEST_CONTROL_PLANE_URI,
+                                                             mCaCertPath, NULL, NULL,
+                                                             API_CALL_CACHE_TYPE_ALL, TEST_CACHING_ENDPOINT_PERIOD,
+                                                             TRUE, &pClientCallbacks));
+    EXPECT_EQ(STATUS_SUCCESS, createKinesisVideoClientSync(pDeviceInfo, pClientCallbacks, &clientHandle));
+    EXPECT_EQ(STATUS_SUCCESS, createKinesisVideoStreamSync(clientHandle, pStreamInfo, &streamHandle));
+
+    for(i = 0; i < fragmentCount * keyFrameInterval; i++) {
+        frame.flags = frame.index % keyFrameInterval == 0 ? FRAME_FLAG_KEY_FRAME : FRAME_FLAG_NONE;
+
+        if (i == keyFrameInterval && frame.flags == FRAME_FLAG_KEY_FRAME) {
+            DLOGD("PAUSING to cause a timeout");
+            EXPECT_EQ(STATUS_SUCCESS, putKinesisVideoFrame(streamHandle, &eofr));
+            THREAD_SLEEP(60 * HUNDREDS_OF_NANOS_IN_A_SECOND);
+            DLOGD("PAUSING After the pause");
+        }
+
+        frame.decodingTs = GETTIME();
+        frame.presentationTs = frame.decodingTs;
+
+        EXPECT_EQ(STATUS_SUCCESS, putKinesisVideoFrame(streamHandle, &frame));
+        THREAD_SLEEP(30 * HUNDREDS_OF_NANOS_IN_A_MILLISECOND);
+        frame.index++;
     }
 
     EXPECT_EQ(STATUS_SUCCESS, stopKinesisVideoStreamSync(streamHandle));

@@ -42,8 +42,7 @@ STATUS blockingCurlCall(PRequestInfo pRequestInfo, PCallInfo pCallInfo)
                 // We should check for the extension being PEM
                 length = (UINT32) STRNLEN(pRequestInfo->certPath, MAX_PATH_LEN);
                 CHK(length > ARRAY_SIZE(CA_CERT_PEM_FILE_EXTENSION), STATUS_INVALID_ARG_LEN);
-                CHK(0 ==
-                    STRCMPI(CA_CERT_PEM_FILE_EXTENSION, &pRequestInfo->certPath[length - ARRAY_SIZE(CA_CERT_PEM_FILE_EXTENSION) + 1]),
+                CHK(0 == STRCMPI(CA_CERT_PEM_FILE_EXTENSION, &pRequestInfo->certPath[length - ARRAY_SIZE(CA_CERT_PEM_FILE_EXTENSION) + 1]),
                     STATUS_INVALID_CA_CERT_PATH);
 
                 curl_easy_setopt(curl, CURLOPT_CAINFO, pRequestInfo->certPath);
@@ -66,8 +65,7 @@ STATUS blockingCurlCall(PRequestInfo pRequestInfo, PCallInfo pCallInfo)
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, pCallInfo);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, pRequestInfo->connectionTimeout / HUNDREDS_OF_NANOS_IN_A_MILLISECOND);
     if (pRequestInfo->completionTimeout != SERVICE_CALL_INFINITE_TIMEOUT) {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         pRequestInfo->completionTimeout / HUNDREDS_OF_NANOS_IN_A_MILLISECOND);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, pRequestInfo->completionTimeout / HUNDREDS_OF_NANOS_IN_A_MILLISECOND);
     }
 
     // Setting up limits for curl timeout
@@ -78,12 +76,11 @@ STATUS blockingCurlCall(PRequestInfo pRequestInfo, PCallInfo pCallInfo)
 
     if (res != CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &url);
-        DLOGE("Curl perform failed for url %s with result %s : %s ", url, curl_easy_strerror(res), errorBuffer);
-        CHK(FALSE, STATUS_IOT_FAILED);
+        CHK_ERR(FALSE, STATUS_CURL_PERFORM_FAILED, "Curl perform failed for url %s with result %s : %s ", url, curl_easy_strerror(res), errorBuffer);
     }
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpStatusCode);
-    CHK_ERR(httpStatusCode == HTTP_STATUS_CODE_OK, STATUS_IOT_FAILED, "Curl call response failed with http status %lu", httpStatusCode);
+    CHK_ERR(httpStatusCode == HTTP_STATUS_CODE_OK, STATUS_CURL_PERFORM_FAILED, "Curl call response failed with http status %lu", httpStatusCode);
 
 CleanUp:
 
@@ -111,13 +108,12 @@ SIZE_T writeCurlResponseCallback(PCHAR pBuffer, SIZE_T size, SIZE_T numItems, PV
     }
 
     // Alloc and copy if needed
-    PCHAR pNewBuffer = pCallInfo->responseData == NULL ?
-                       (PCHAR) MEMALLOC(pCallInfo->responseDataLen + dataSize + SIZEOF(CHAR)) :
-                       (PCHAR) REALLOC(pCallInfo->responseData,
-                                       pCallInfo->responseDataLen + dataSize + SIZEOF(CHAR));
+    PCHAR pNewBuffer = pCallInfo->responseData == NULL
+        ? (PCHAR) MEMALLOC(pCallInfo->responseDataLen + dataSize + SIZEOF(CHAR))
+        : (PCHAR) REALLOC(pCallInfo->responseData, pCallInfo->responseDataLen + dataSize + SIZEOF(CHAR));
     if (pNewBuffer != NULL) {
         // Append the new data
-        MEMCPY((PBYTE)pNewBuffer + pCallInfo->responseDataLen, pBuffer, dataSize);
+        MEMCPY((PBYTE) pNewBuffer + pCallInfo->responseDataLen, pBuffer, dataSize);
 
         pCallInfo->responseData = pNewBuffer;
         pCallInfo->responseDataLen += (UINT32) dataSize;

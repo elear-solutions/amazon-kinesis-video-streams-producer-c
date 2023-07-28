@@ -1,13 +1,17 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.6.3)
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake;${CMAKE_MODULE_PATH}")
 include(Utilities)
 project(KinesisVideoProducerC LANGUAGES C)
 
+include(GNUInstallDirs)
+
+
 # User Flags
 option(ADD_MUCLIBC "Add -muclibc c flag" OFF)
+option(BUILD_STATIC "Static build" OFF)
 option(BUILD_DEPENDENCIES "Whether or not to build depending libraries from source" ON)
 option(USE_OPENSSL "Use openssl as crypto library" ON)
-option(USE_MBEDTLS "Use openssl as crypto library" OFF)
+option(USE_MBEDTLS "Use mbedtls as crypto library" OFF)
 option(BUILD_COMMON_LWS "Whether or not to build ProducerC libwebsockets common library" OFF)
 option(BUILD_COMMON_CURL "Whether or not to build ProducerC curl common library" ON)
 option(BUILD_OPENSSL_PLATFORM "If buildng OpenSSL what is the target platform" OFF)
@@ -21,6 +25,7 @@ option(MEMORY_SANITIZER "Build with MemorySanitizer." OFF)
 option(THREAD_SANITIZER "Build with ThreadSanitizer." OFF)
 option(UNDEFINED_BEHAVIOR_SANITIZER "Build with UndefinedBehaviorSanitizer." OFF)
 option(ALIGNED_MEMORY_MODEL "Aligned memory model ONLY." OFF)
+option(SET_SSL_CALLBACKS "Set SSL thread and lock callbacks." OFF)
 
 set(CMAKE_MACOSX_RPATH TRUE)
 add_definitions(-DCONSTRAINED_DEVICE)
@@ -92,22 +97,32 @@ if(BUILD_DEPENDENCIES)
   message(STATUS "Finished building dependencies.")
 endif()
 
-############# fetch repos that we need do add_subdirectory ############
+find_package(PkgConfig REQUIRED)
 
-# repos that we will build using add_subdirectory will be stored in this path
-set(DEPENDENCY_DOWNLOAD_PATH ${CMAKE_CURRENT_SOURCE_DIR}/dependency)
-set(BUILD_ARGS -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE})
-fetch_repo(kvspic ${BUILD_ARGS})
-add_subdirectory("${DEPENDENCY_DOWNLOAD_PATH}/libkvspic/kvspic-src")
-file(GLOB PIC_HEADERS "${pic_project_SOURCE_DIR}/src/*/include")
-include_directories("${PIC_HEADERS}")
+############# Check system for kvspic #############
 
-############# fetch repos that we need do add_subdirectory done ############
+pkg_check_modules(KVSPIC libkvspicUtils)
+if(KVSPIC_FOUND)
+  set(OPEN_SRC_INCLUDE_DIRS ${OPEN_SRC_INCLUDE_DIRS} ${KVSPIC_INCLUDE_DIRS})
+  link_directories(${KVSPIC_LIBRARY_DIRS})
+else()
+  ############# fetch repos that we need do add_subdirectory ############
+  # repos that we will build using add_subdirectory will be stored in this path
+  set(DEPENDENCY_DOWNLOAD_PATH ${CMAKE_CURRENT_SOURCE_DIR}/dependency)
+  set(BUILD_ARGS -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE})
+  fetch_repo(kvspic ${BUILD_ARGS})
+  add_subdirectory("${DEPENDENCY_DOWNLOAD_PATH}/libkvspic/kvspic-src")
+  file(GLOB PIC_HEADERS "${pic_project_SOURCE_DIR}/src/*/include")
+  include_directories("${PIC_HEADERS}")
+
+  ############# fetch repos that we need do add_subdirectory done ############
+endif()
+
+############# Check system for kvspic done #############
 
 ############# find dependent libraries ############
 
 find_package(Threads)
-find_package(PkgConfig REQUIRED)
 
 set(OPEN_SRC_INCLUDE_DIRS ${LIBKVSPIC_INCLUDE_DIRS})
 
@@ -163,8 +178,12 @@ else()
     message(FATAL_ERROR "Unknown bitness")
 endif()
 
-if("${CMAKE_C_COMPILER_ID}" MATCHES "GNU|Clang")
+if(${CMAKE_C_COMPILER_ID} MATCHES "GNU|Clang")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+
+    if(ADD_MUCLIBC)
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -muclibc")
+    endif()
 
     if(CODE_COVERAGE)
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g -fprofile-arcs -ftest-coverage")
@@ -205,8 +224,14 @@ if(ALIGNED_MEMORY_MODEL)
     add_definitions(-DALIGNED_MEMORY_MODEL)
 endif()
 
+if(SET_SSL_CALLBACKS)
+    add_definitions(-DSET_SSL_CALLBACKS)
+endif()
+
+
 # use openssl by default
 set(CPRODUCER_COMMON_TLS_OPTION KVS_USE_OPENSSL)
+
 set(PRODUCER_CRYPTO_LIBRARY
         OpenSSL::Crypto
         OpenSSL::SSL)
@@ -236,12 +261,12 @@ if(BUILD_COMMON_LWS)
 
     install(
       TARGETS kvsCommonLws
-      ARCHIVE DESTINATION lib
-      LIBRARY DESTINATION lib
-      RUNTIME DESTINATION bin)
+      ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
     install(
       FILES ${CMAKE_CURRENT_BINARY_DIR}/libkvsCommonLws.pc
-      DESTINATION lib/pkgconfig)
+      DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 endif()
 
 if(BUILD_COMMON_CURL)
@@ -259,38 +284,43 @@ if(BUILD_COMMON_CURL)
 
     install(
       TARGETS kvsCommonCurl
-      ARCHIVE DESTINATION lib
-      LIBRARY DESTINATION lib
-      RUNTIME DESTINATION bin)
+      ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
     install(
       FILES ${CMAKE_CURRENT_BINARY_DIR}/libkvsCommonCurl.pc
-      DESTINATION lib/pkgconfig)
+      DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 
     configure_file(
       "${CMAKE_CURRENT_SOURCE_DIR}/libcproducer.pc.cmake"
       "${CMAKE_CURRENT_BINARY_DIR}/libcproducer.pc" @ONLY)
 
+    set(TYPE_OF_LIB SHARED)
+    if (BUILD_STATIC)
+      set(TYPE_OF_LIB STATIC)
+    endif()
+
     if (WIN32)
       add_library(cproducer STATIC ${PRODUCER_C_SOURCE_FILES})
     else()
-      add_library(cproducer SHARED ${PRODUCER_C_SOURCE_FILES})
+      add_library(cproducer ${TYPE_OF_LIB} ${PRODUCER_C_SOURCE_FILES})
     endif()
     target_link_libraries(cproducer PUBLIC kvsCommonCurl kvspic)
 
     install(
       TARGETS cproducer
-      ARCHIVE DESTINATION lib
-      LIBRARY DESTINATION lib
-      RUNTIME DESTINATION bin)
+      ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
     install(
       FILES ${CMAKE_CURRENT_BINARY_DIR}/libcproducer.pc
-      DESTINATION lib/pkgconfig)
+      DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 
     add_executable(kvsVideoOnlyStreamingSample ${KINESIS_VIDEO_PRODUCER_C_SRC}/samples/KvsVideoOnlyStreamingSample.c)
     target_link_libraries(kvsVideoOnlyStreamingSample cproducer)
 
-    add_executable(kvsAacAudioVideoStreamingSample ${KINESIS_VIDEO_PRODUCER_C_SRC}/samples/KvsAacAudioVideoStreamingSample.c)
-    target_link_libraries(kvsAacAudioVideoStreamingSample cproducer)
+    add_executable(kvsAudioVideoStreamingSample ${KINESIS_VIDEO_PRODUCER_C_SRC}/samples/KvsAudioVideoStreamingSample.c)
+    target_link_libraries(kvsAudioVideoStreamingSample cproducer)
 
     if (BUILD_TEST)
         add_subdirectory(tst)
