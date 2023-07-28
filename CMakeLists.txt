@@ -28,6 +28,7 @@ option(ALIGNED_MEMORY_MODEL "Aligned memory model ONLY." OFF)
 option(SET_SSL_CALLBACKS "Set SSL thread and lock callbacks." OFF)
 
 set(CMAKE_MACOSX_RPATH TRUE)
+add_definitions(-DCONSTRAINED_DEVICE)
 
 get_filename_component(ROOT "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
@@ -143,7 +144,7 @@ if(BUILD_COMMON_CURL)
     find_package(CURL REQUIRED)
     set(CURL_LIBRARIES CURL::libcurl)
   else()
-    pkg_check_modules(CURL REQUIRED libcurl)
+    find_package(CURL REQUIRED)
   endif()
 
   set(OPEN_SRC_INCLUDE_DIRS ${OPEN_SRC_INCLUDE_DIRS} ${CURL_INCLUDE_DIRS})
