@@ -1,3 +1,4 @@
+import os
 from conans import ConanFile, CMake, tools
 
 class cmockalibConan(ConanFile):
@@ -18,10 +19,31 @@ class cmockalibConan(ConanFile):
         "shared": False
     }
 
+    def _get_install_channel(self):
+        """
+        Get dependency channel with fallback logic.
+        
+        Priority:
+        1. INSTALL_CHANNEL environment variable (explicit override - any channel)
+        2. 'master' (production default)
+        """
+        install_channel = os.getenv('INSTALL_CHANNEL')
+        if install_channel:
+            return install_channel
+        return 'master'
+
+    def requirements(self):
+        default_user = self.user if self.user else "jenkins"
+        install_channel = self._get_install_channel()
+        self.requires("OpenSSL/1.0.2r@%s/%s" % (default_user, install_channel))
+        self.requires("curl/7.63.0@%s/%s" % (default_user, install_channel))
+
     def build(self):
         cmake = CMake(self)
 
         cmake.definitions["BUILD_DEPENDENCIES"] = False
+        cmake.definitions["OPENSSL_ROOT_DIR"] = self.deps_cpp_info["OpenSSL"].rootpath
+        cmake.definitions["CURL_ROOT"] = self.deps_cpp_info["curl"].rootpath
 
         cmake.configure(source_folder=".")
         cmake.build()
